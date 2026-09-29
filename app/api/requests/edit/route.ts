@@ -4,7 +4,8 @@ import { verifyToken } from "@/lib/auth";
 import { RequestBody, errorText } from "@/lib/requestSchema";
 import { audit } from "@/lib/workflow";
 import { STATUS } from "@/lib/queue";
-import { notifyRole } from "@/lib/mail";
+import { after } from "next/server";
+import { notifyRole, processEmailQueue } from "@/lib/mail";
 
 /** The requester resubmits a request that was sent back, using the link from their email. */
 export async function PUT(req: Request) {
@@ -32,8 +33,9 @@ export async function PUT(req: Request) {
       [p.id, d.employee_email, d.employee_name, d.employee_id, d.department, d.job_title, d.line_manager, d.employment_type,
         d.amount_requested, d.reason, d.reason_details, d.has_existing_advance ? d.outstanding_advance : 0, d.repayment_months, STATUS.HR]);
     await audit(c, p.id, "Requester", d.employee_email, "Resubmitted");
+    await notifyRole("HR", `Salary advance ${p.id} was updated`, p.id, "updated by the requester and ready for your review", c);
     await c.query("COMMIT");
-    await notifyRole("HR", `Salary advance ${p.id} was updated`, p.id, "updated by the requester and ready for your review");
+    after(() => processEmailQueue());
     return NextResponse.json({ id: p.id });
   } catch (e) {
     await c.query("ROLLBACK").catch(() => {});

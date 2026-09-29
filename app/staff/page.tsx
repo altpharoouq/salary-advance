@@ -57,10 +57,10 @@ export default async function Staff({ searchParams }: { searchParams: Promise<{ 
           <tbody>
             {items.map((r) => (
               <tr key={r.id} className={r.overall_status === mine[s.role] ? "mine" : undefined}>
-                <td>{r.overall_status === mine[s.role] && <span className="dotmark" title="Needs your action" />}<Link href={`/staff/${r.id}`}>{r.id}</Link></td>
+                <td>{r.overall_status === mine[s.role] && <span className="dotmark" title="Needs your action" />}<Link href={`/staff/${r.id}`} className="rowlink">{r.id}</Link></td>
                 <td>{r.employee_name}<br /><small>{r.department}</small></td>
                 <td>{money(r.amount_requested)}</td>
-                <td><span className={`badge ${r.overall_status}`}>{r.overall_status}</span></td>
+                <td><span className="badge" data-s={r.overall_status}>{r.overall_status}</span></td>
                 <td>{r.overall_status === "Paid" ? money(r.outstanding_balance) : "—"}</td>
                 <td>{new Date(r.submitted_at).toLocaleDateString()}</td>
               </tr>

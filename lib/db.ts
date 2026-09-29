@@ -66,6 +66,23 @@ CREATE TABLE IF NOT EXISTS repayments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS email_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  template TEXT NOT NULL,
+  variables JSONB,
+  recipient TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  request_id TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  locked_until TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS email_jobs_due ON email_jobs(status, next_attempt_at);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id SERIAL PRIMARY KEY,
   at TIMESTAMPTZ NOT NULL DEFAULT now(),

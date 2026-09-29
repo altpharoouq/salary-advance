@@ -5,7 +5,8 @@ import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { audit, DEPARTMENTS, EMPLOYMENT_TYPES, PERIODS, present, REASONS, SELECT_REQ } from "@/lib/workflow";
 import { QUEUE } from "@/lib/queue";
-import { notifyRole, sendMail } from "@/lib/mail";
+import { after } from "next/server";
+import { firstName, notifyRole, processEmailQueue, sendEmail } from "@/lib/mail";
 
 export async function POST(req: Request) {
   const parsed = RequestBody.safeParse(await req.json().catch(() => null));
@@ -31,10 +32,12 @@ export async function POST(req: Request) {
       [id, d.employee_email, d.employee_name, d.employee_id, d.department, d.job_title, d.line_manager, d.employment_type,
         d.amount_requested, d.reason, d.reason_details, d.has_existing_advance ? d.outstanding_advance : 0, d.repayment_months]);
     await audit(c, id, "Submission", d.employee_email, "Submitted");
+    await notifyRole("HR", `New salary advance request: ${id}`, id, "waiting for your review", c);
+    await sendEmail(
+      { name: "salary_advance_request_received_en", variables: { name: firstName(d.employee_name), requestId: id } },
+      d.employee_email, `We got your salary advance request (${id})`, id, c);
     await c.query("COMMIT");
-    await notifyRole("HR", `New salary advance request: ${id}`, id, "waiting for your review");
-    await sendMail(d.employee_email, `We got your salary advance request (${id})`,
-      `Hi ${d.employee_name},\n\nYour request ${id} has been received. It goes to HR first, then the Global Head and the CEO. We'll email you when there's an update.\n\nPlease note that submitting a request doesn't mean it's approved.\n\nThanks`);
+    after(() => processEmailQueue());
     return NextResponse.json({ id }, { status: 201 });
   } catch (e) {
     await c.query("ROLLBACK").catch(() => {});

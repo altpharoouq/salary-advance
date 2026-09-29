@@ -31,7 +31,7 @@ export default function RepaymentActions({ id, canRecord, canRemove, suggested, 
           <thead><tr><th>#</th><th>Due</th><th>Expected</th><th>Repaid</th><th>Status</th></tr></thead>
           <tbody>{schedule.map((i) => (
             <tr key={i.n}><td><span className="num">{i.n}</span></td><td><span className="num">{i.due}</span></td><td>{money(i.amount)}</td><td>{money(i.paid)}</td>
-              <td><span className={`badge ${i.status}`}>{i.status}</span></td></tr>))}</tbody>
+              <td><span className="badge" data-s={i.status}>{i.status}</span></td></tr>))}</tbody>
         </table></div>
       </Modal>
 

@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { getSession, signToken } from "@/lib/auth";
 import { audit, present, refreshStatus, SELECT_REQ } from "@/lib/workflow";
 import { QUEUE, ROLE_LABEL, SEND_TO, STAGE_OF, STATUS, TARGET_LABEL, type SendTarget } from "@/lib/queue";
-import { notifyRole, sendMail, APP_URL } from "@/lib/mail";
+import { after as runAfter } from "next/server";
+import { APP_URL, firstName, notifyRole, processEmailQueue, sendEmail, type Email } from "@/lib/mail";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -21,6 +22,8 @@ export async function GET(_: Request, { params }: Ctx) {
   ]);
   return NextResponse.json({ request: present(rows[0]), repayments: rep.rows, audit: log.rows });
 }
+
+const APPROVER: Record<string, string> = { HR: "HR", GLOBAL_HEAD: "The Global Head", CEO: "The CEO", FINANCE: "Finance" };
 
 const Action = z.discriminatedUnion("action", [
   z.object({
@@ -49,6 +52,9 @@ export async function PATCH(req: Request, { params }: Ctx) {
   const c = await pool.connect();
   const fail = async (status: number, error: string) => { await c.query("ROLLBACK"); return NextResponse.json({ error }, { status }); };
   const actor = `${session.name} <${session.email}>`;
+  // Emails are queued inside the transaction, so they exist only if the action commits.
+  const notify = (role: Parameters<typeof notifyRole>[0], subject: string, requestId: string, message: string) => notifyRole(role, subject, requestId, message, c);
+  const mail = (email: Email, to: string, subject: string) => sendEmail(email, to, subject, id, c);
   let after: (() => Promise<void>) | undefined;
 
   try {
@@ -63,8 +69,9 @@ export async function PATCH(req: Request, { params }: Ctx) {
       const date = a.payment_date ?? new Date().toISOString().slice(0, 10);
       await c.query(`UPDATE requests SET payment_status=$2,payment_date=$3 WHERE id=$1`, [id, a.status, a.status === "Paid" ? date : null]);
       await audit(c, id, "Payment", actor, a.status);
-      if (a.status === "Paid") after = () => sendMail(r.employee_email, `Your salary advance ${id} has been paid`,
-        `Hi ${r.employee_name},\n\nYour salary advance has been paid out. The repayments will come out of your salary as agreed.\n\nThanks`);
+      if (a.status === "Paid") after = () => mail(
+        { name: "salary_advance_paid_en", variables: { name: firstName(r.employee_name), requestId: id } },
+        r.employee_email, `Your salary advance ${id} has been paid`);
     } else {
       if (r.overall_status !== STAGE_OF[role]) return await fail(409, "This request isn't waiting on you");
 
@@ -79,23 +86,25 @@ export async function PATCH(req: Request, { params }: Ctx) {
             `UPDATE requests SET hr_status='Approved',hr_reviewer=$2,hr_comments=$3,hr_decision_at=now(),approved_amount=$4,
                deduction_start_date=$5,eligibility='Eligible',overall_status=$6,${clear} WHERE id=$1`,
             [id, actor, a.comments ?? null, amt, a.deduction_start_date, STATUS.HEAD]);
-          after = () => notifyRole("GLOBAL_HEAD", `Salary advance ${id} needs your review`, id, "ready for your review");
+          after = () => notify("GLOBAL_HEAD", `Salary advance ${id} needs your review`, id, "ready for your review");
         } else if (role === "GLOBAL_HEAD") {
           await c.query(`UPDATE requests SET head_status='Approved',head_reviewer=$2,head_comments=$3,head_decision_at=now(),overall_status=$4,${clear} WHERE id=$1`,
             [id, actor, a.comments ?? null, STATUS.CEO]);
-          after = () => notifyRole("CEO", `Salary advance ${id} needs your approval`, id, "ready for CEO approval");
+          after = () => notify("CEO", `Salary advance ${id} needs your approval`, id, "ready for CEO approval");
         } else {
           await c.query(`UPDATE requests SET ceo_status='Approved',ceo_approver=$2,ceo_comments=$3,ceo_decision_at=now(),overall_status=$4,${clear} WHERE id=$1`,
             [id, actor, a.comments ?? null, STATUS.APPROVED]);
-          const amt = Number(r.approved_amount), months = r.repayment_months;
+          const amount = Number(r.approved_amount).toLocaleString("en-NG", { maximumFractionDigits: 2 });
+          const startDate = new Date(r.deduction_start_date).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
           after = async () => {
-            // Everyone involved hears about the final approval.
-            await sendMail(r.employee_email, `Your salary advance ${id} is approved`,
-              `Hi ${r.employee_name},\n\nGood news: your salary advance has been approved for ₦${amt.toLocaleString()}, to be repaid over ${months} months starting ${String(r.deduction_start_date).slice(0, 10)}.\n\nHR will be in touch about the next steps.\n\nThanks`);
-            await notifyRole("HR", `Salary advance ${id} is fully approved`, id, "approved by the CEO. You can download the approval from the request page");
-            await notifyRole("GLOBAL_HEAD", `Salary advance ${id} is fully approved`, id, "approved by the CEO");
-            await notifyRole("CEO", `Salary advance ${id} is fully approved`, id, "approved. Thanks for signing off");
-            await notifyRole("FINANCE", `Salary advance ${id} is approved, ready to pay`, id, "approved and ready for payment");
+            // Everyone involved hears about the final approval, one send per recipient group.
+            await mail(
+              { name: "salary_advance_approved_en", variables: { name: firstName(r.employee_name), requestId: id, amount, months: String(r.repayment_months), startDate } },
+              r.employee_email, `Your salary advance ${id} is approved`);
+            await notify("HR", `Salary advance ${id} is fully approved`, id, "approved by the CEO. You can download the approval from the request page");
+            await notify("GLOBAL_HEAD", `Salary advance ${id} is fully approved`, id, "approved by the CEO");
+            await notify("CEO", `Salary advance ${id} is fully approved`, id, "approved. Thanks for signing off");
+            await notify("FINANCE", `Salary advance ${id} is approved, ready to pay`, id, "approved and ready for payment");
           };
         }
         await audit(c, id, ROLE_LABEL[role], actor, "Approved", a.comments);
@@ -117,19 +126,21 @@ export async function PATCH(req: Request, { params }: Ctx) {
         if (a.to === "REQUESTER") {
           after = async () => {
             const token = await signToken({ id, rev, typ: "edit" }, "14d");
-            await sendMail(r.employee_email, `Your salary advance request needs a few changes (${id})`,
-              `Hi ${r.employee_name},\n\n${session.name} has looked at your request and needs a few changes:\n\n"${a.comment}"\n\nYou can update your request here (the link works for 14 days):\n${APP_URL()}/edit/${token}\n\nThanks`);
+            await mail(
+              { name: "salary_advance_changes_requested_en", variables: { name: firstName(r.employee_name), requestId: id, approver: APPROVER[role], comment: a.comment, editLink: `${APP_URL()}/edit/${token}` } },
+              r.employee_email, `Your salary advance request needs a few changes (${id})`);
           };
         } else {
           const to = a.to === "HR" ? "HR" : "GLOBAL_HEAD";
-          after = () => notifyRole(to, `Salary advance ${id} was sent back to you`, id, `back with you for review. ${session.name} says: "${a.comment}"`);
+          after = () => notify(to, `Salary advance ${id} was sent back to you`, id, `back with you for review. ${APPROVER[role]} says: "${a.comment}"`);
         }
       }
     }
 
     const status = await refreshStatus(c, id);
-    await c.query("COMMIT");
     await after?.();
+    await c.query("COMMIT");
+    runAfter(() => processEmailQueue());
     return NextResponse.json({ ok: true, status });
   } catch (e) {
     await c.query("ROLLBACK").catch(() => {});

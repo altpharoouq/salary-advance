@@ -61,7 +61,7 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
           {r.returned_note && <a href="#activity" className="msg"><span className="dotmark" />Message from {who(r.returned_by)} · View</a>}
         </div>
         <div className="head-actions">
-          <span className={`badge lg ${r.overall_status}`}>{r.overall_status}</span>
+          <span className="badge lg" data-s={r.overall_status}>{r.overall_status}</span>
           {s.role === "HR" && r.ceo_status === "Approved" && <a className="btn small" href={`/api/requests/${r.id}/download`}>Download approval (PDF)</a>}
         </div>
       </header>
@@ -95,10 +95,10 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
             <h2 className="sec">Approvals &amp; activity</h2>
             <ol className="tl">
               {log.rows.map((l) => {
-                const kind = /^(Approved|Paid|Completed)/.test(l.decision) ? "done" : /^Sent back/.test(l.decision) ? "back" : "event";
+                const kind = /^(Approved|Paid|Completed)/.test(l.decision) ? "done" : /^Sent back/.test(l.decision) ? "sentback" : "event";
                 return (
                   <li key={l.id} className={kind}>
-                    <span className="mark">{kind === "done" ? "✓" : kind === "back" ? "↩" : ""}</span>
+                    <span className="mark">{kind === "done" ? "✓" : kind === "sentback" ? "↩" : ""}</span>
                     <div>
                       <b>{l.stage} · {l.decision}{l.stage === "Repayment" && /^\d/.test(l.detail ?? "") ? <> {money(Number(l.detail))}</> : null}</b>
                       <span className="sub2">{who(l.actor)} · {new Date(l.at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
@@ -141,7 +141,7 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
               <>
                 <div className="row" style={{ marginBottom: 8, fontSize: 14 }}>
                   <span>{money(r.total_repaid)} of {money(r.approved_amount)}</span>
-                  <span className="badge">{r.repayment_status}</span>
+                  <span className="badge" data-s={r.repayment_status}>{r.repayment_status}</span>
                 </div>
                 <div className="progress"><div style={{ width: `${pct}%` }} /></div>
                 <dl className="mini" style={{ marginTop: 16 }}>
